@@ -1,0 +1,45 @@
+# Deployment tuning for the standardized CKAN export pipeline.
+#
+# The per-module SPEC (exports/<slug>.py) is the source of truth for the data
+# shape; this file is where a deployment flips the data *source* or retention
+# behaviour without touching code. `source` is the swappability point promised
+# by the plan (ADR-003 + the hybrid-source decision): `scorpio` reads the
+# NGSI-LD broker, `ovak` reads the OVAK API directly.
+#
+# Today's hybrid assignment (2026-08):
+#   scorpio : anonimizalt_ingazasi_utvonalak, aqi_pm_gazkomponensek,
+#             jaratok_nyomvonala_terkepen, jarmuforgalom_urbanalytics,
+#             urbanalytics_forgalom_utszakaszokkal,
+#             urbanalytics_utszakasz_es_eszkozadatok
+#   ovak    : idojarasi_hatas_bio_reszecskek, idojarassal_korrigalt_forgalom,
+#             meteorologiai_kontextus, pollen_es_bio_reszecskek
+#             (no WeatherObserved / Bioparticle type in Scorpio)
+#
+# Flip an export to `source: scorpio` once ingestion covers the missing types;
+# the export modules read only ExportContext and never see the backend.
+
+defaults:
+  page_size: 500
+
+exports:
+  idojarasi_hatas_bio_reszecskek:
+    source: ovak
+    window: today
+    max_gap_minutes: 120
+
+  idojarassal_korrigalt_forgalom:
+    source: ovak
+    window: today
+    max_gap_minutes: 120
+
+  megallok_es_jaratsuruseg:
+    source: scorpio
+    window: all
+
+  meteorologiai_kontextus:
+    source: ovak
+    window: today
+
+  pollen_es_bio_reszecskek:
+    source: ovak
+    window: today
