@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import time
 import urllib.parse
+from urllib.parse import quote
 from datetime import datetime
 from typing import Any, Iterable, Optional
 
@@ -40,7 +41,7 @@ from .ngsilib import iso_datetime
 
 log = logging.getLogger(__name__)
 
-MAX_PAGES = 100000
+MAX_PAGES = 400
 
 
 class ScorpioBackend:
@@ -139,6 +140,18 @@ class ScorpioBackend:
         entities: list[dict] = []
         offset = 0
 
+        # Server-side window filter: when a date window is requested, push it to
+        # Scorpio via the `q` query param so the broker filters instead of
+        # returning the whole type (e.g. AirQualityObserved ~382k entities) for
+        # client-side filtering. This is what keeps `window="today"` exports from
+        # stalling on huge types. The client-side `_in_window` check below stays
+        # as a safety net.
+        q_filter = None
+        if time_from is not None and time_to is not None:
+            _ge = quote(f"dateObserved>={time_from.isoformat()}")
+            _le = quote(f"dateObserved<={time_to.isoformat()}")
+            q_filter = f"{_ge};{_le}"
+
         while offset < MAX_PAGES * page_size:
             params: dict[str, Any] = {
                 "type": stored,
@@ -146,6 +159,8 @@ class ScorpioBackend:
                 "offset": offset,
                 "count": "true",
             }
+            if q_filter is not None:
+                params["q"] = q_filter
             resp = None
             for attempt in range(1, 5):
                 try:
