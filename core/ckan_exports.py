@@ -360,6 +360,13 @@ class CKANExportsClient:
                 "force": True,
             })
 
+        self.create_resource_views(
+            resource["id"],
+            spec.fields,
+            spec.charts,
+            spec.resource_title,
+        )
+
         log.info(
             "Napi resource frissítve: %s; új rekordok: %d; már meglévő: %d",
             resource_name, len(new_records), len(records) - len(new_records),
