@@ -11,10 +11,14 @@ Correctness notes (learned live against ``stids-scorpio.ovakszeged.hu``):
   are likewise stored under full IRIs. Always resolve short names through
   :meth:`resolve_stored_type` and read attribute values through
   :func:`core.context.attr`.
-- Server-side ``timerel=between`` filtering is *unreliable*: the broker ignores
-  the parameter for ``AirQualityObserved``/``TrafficFlowObserved`` and returns
-  the full set. The authoritative window filter is therefore applied
-  client-side on the stored ``dateObserved`` attribute (:meth:`_in_window`).
+- Server-side filtering is *unusable* on this broker: the ``q`` filter returns
+  an empty result for every supported attribute form (short name, stored IRI,
+  any encoding) on ``AirQualityObserved``/``TrafficFlowObserved``, and
+  ``timerel=between`` is ignored (returns the full set). The authoritative
+  window filter is therefore applied client-side on the stored
+  ``dateObserved`` attribute (:meth:`_in_window`). Reference types that carry
+  no ``dateObserved`` (Organization, Device, RoadSegment, AnonymousCommuterId,
+  Gtfs*) are kept unchanged when a window is requested.
 - For the same reason no ``attrs`` projection is sent: passing short attribute
   names (which do not match the stored IRIs) would make Scorpio drop every
   attribute and silently empty the export. Full entities are fetched.
@@ -41,7 +45,7 @@ from .ngsilib import iso_datetime
 
 log = logging.getLogger(__name__)
 
-MAX_PAGES = 400
+MAX_PAGES = 4000
 
 
 class ScorpioBackend:
@@ -129,10 +133,12 @@ class ScorpioBackend:
         """Fetch entities of a type with offset paging.
 
         ``time_from``/``time_to`` apply the client-side ``dateObserved`` window
-        filter; entities without a parseable date attribute are kept when no
-        window is requested. ``require_attr`` keeps only entities carrying the
-        named attribute. ``limit`` is a hard cap on the number of *kept*
-        entities (page size shrinks to match), used for smoke tests.
+        filter; entities without a parseable date attribute (reference/lookup
+        types such as Organization, Device, RoadSegment) are always kept so the
+        joins the export modules rely on are not emptied by a time window.
+        ``require_attr`` keeps only entities carrying the named attribute.
+        ``limit`` is a hard cap on the number of *kept* entities (page size
+        shrinks to match), used for smoke tests.
         """
         stored = self.resolve_stored_type(entity_type)
         page_size = min(limit, self._settings.page_size) if limit else self._settings.page_size
@@ -140,18 +146,12 @@ class ScorpioBackend:
         entities: list[dict] = []
         offset = 0
 
-        # Server-side window filter: when a date window is requested, push it to
-        # Scorpio via the `q` query param so the broker filters instead of
-        # returning the whole type (e.g. AirQualityObserved ~382k entities) for
-        # client-side filtering. This is what keeps `window="today"` exports from
-        # stalling on huge types. The client-side `_in_window` check below stays
-        # as a safety net.
-        q_filter = None
-        if time_from is not None and time_to is not None:
-            _ge = quote(f"dateObserved>={time_from.isoformat()}")
-            _le = quote(f"dateObserved<={time_to.isoformat()}")
-            q_filter = f"{_ge};{_le}"
-
+        # NOTE: no server-side `q` filter is sent here. Probing the live broker
+        # showed the `q=` dateObserved filter returns an empty result for every
+        # attribute form (short name, stored IRI, any encoding) on the
+        # AirQualityObserved / TrafficFlowObserved types, and `timerel=between`
+        # is silently ignored (it returns the whole type). Client-side
+        # `_in_window` is the only reliable date filter.
         while offset < MAX_PAGES * page_size:
             params: dict[str, Any] = {
                 "type": stored,
@@ -159,8 +159,6 @@ class ScorpioBackend:
                 "offset": offset,
                 "count": "true",
             }
-            if q_filter is not None:
-                params["q"] = q_filter
             resp = None
             for attempt in range(1, 5):
                 try:
@@ -212,7 +210,8 @@ class ScorpioBackend:
             for entity in page:
                 if require_attr and not has_attr(entity, require_attr):
                     continue
-                if time_from is not None and time_to is not None and not self._in_window(entity, time_from, time_to):
+                if time_from is not None and time_to is not None and self._is_dated(entity) \
+                        and not self._in_window(entity, time_from, time_to):
                     continue
                 entities.append(entity)
                 kept += 1
@@ -230,6 +229,15 @@ class ScorpioBackend:
             time.sleep(0.05)
 
         return entities
+
+    @staticmethod
+    def _is_dated(entity: dict) -> bool:
+        """True when the entity carries a parseable timestamp attribute."""
+        try:
+            raw = attr(entity, "dateObserved", "observedAt", "observationDateTime")
+        except Exception:
+            return False
+        return raw not in (None, "")
 
     @staticmethod
     def _in_window(entity: dict, time_from: datetime, time_to: datetime) -> bool:

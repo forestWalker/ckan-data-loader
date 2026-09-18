@@ -222,8 +222,16 @@ class OVAKBackend:
         if kind == "stoptimes":
             return self._fetch_stoptimes(stream, cap=cap)
         if kind in ("time", "time_span"):
-            from_param = "DateFrom" if kind == "time" else "timeFrom"
-            to_param = "DateTo" if kind == "time" else "timeTo"
+            if kind == "time":
+                # lumbara time-series endpoints honor DateFrom/DateTo; they
+                # ignore timeFrom/timeTo and return the full archive, which
+                # silently fills windowed exports (meteorologiai, pollen,
+                # idojarasi_hatas) with stale rows.
+                from_param = "DateFrom"
+                to_param = "DateTo"
+            else:
+                from_param = "timeFrom"
+                to_param = "timeTo"
             query = self._time_query(from_param, to_param, date_from, date_to)
             return self._paginate(endpoint, query, cap=cap)
         if kind == "list":
